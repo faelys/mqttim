@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"github.com/go-mqtt/mqtt"
@@ -13,12 +14,15 @@ import (
 )
 
 type IrcConfig struct {
-	Channel  string
-	Server   string
-	Nick     string
-	CmdStart string
-	CmdMid   string
-	CmdEnd   string
+	Channel    string
+	Server     string
+	Nick       string
+	CmdStart   string
+	CmdMid     string
+	CmdEnd     string
+	MaxLine    int
+	ContSuffix string
+	ContPrefix string
 }
 
 type MqttConfig struct {
@@ -128,8 +132,32 @@ func mqtt2irc(m *mqtt.Client, c chan Msg, config *Config) error {
 }
 
 func ircSender(config *IrcConfig, i *irc.Connection, c chan Msg) error {
+	var buf bytes.Buffer
+
 	for {
 		m := <-c
-		i.Privmsgf(config.Channel, "%s: %s", m.Topic, m.Message)
+
+		if len(m.Topic)+2+len(m.Message) < config.MaxLine {
+			i.Privmsgf(config.Channel, "%s: %s", m.Topic, m.Message)
+		} else {
+			for s := 0; s < len(m.Message); {
+				l := len(m.Message) - s
+				buf.Reset()
+				buf.Write(m.Topic)
+				buf.WriteString(": ")
+				if s > 0 {
+					buf.WriteString(config.ContPrefix)
+				}
+				if buf.Len()+l <= config.MaxLine {
+					buf.Write(m.Message[s:])
+				} else {
+					l = config.MaxLine - buf.Len() - len(config.ContSuffix)
+					buf.Write(m.Message[s : s+l])
+					buf.WriteString(config.ContSuffix)
+				}
+				i.Privmsg(config.Channel, string(buf.Bytes()))
+				s += l
+			}
+		}
 	}
 }
