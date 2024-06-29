@@ -32,6 +32,11 @@ type Config struct {
 	Mqtt MqttConfig
 }
 
+type Msg struct {
+	Topic   []byte
+	Message []byte
+}
+
 func readConfig(path string, config *Config) (err error) {
 	var f *os.File
 	f, err = os.Open("mqttim.toml")
@@ -54,6 +59,8 @@ func main() {
 	var err error
 	var config Config
 	var m *mqtt.Client
+
+	ircQueue := make(chan Msg)
 
 	err = readConfig("mqttim.toml", &config)
 	if err != nil {
@@ -92,23 +99,37 @@ func main() {
 		fmt.Printf("Err %s", err)
 		return
 	}
-	go mqtt2irc(m, i, &config)
+	go mqtt2irc(m, ircQueue, &config)
+	go ircSender(&config.Irc, i, ircQueue)
 	i.Loop()
 }
 
-func mqtt2irc(m *mqtt.Client, i *irc.Connection, config *Config) error {
+func dup(src []byte) []byte {
+	res := make([]byte, len(src))
+	copy(res, src)
+	return res
+}
+
+func mqtt2irc(m *mqtt.Client, c chan Msg, config *Config) error {
 	var big *mqtt.BigMessage
 
 	for {
 		message, topic, err := m.ReadSlices()
 		switch {
 		case err == nil:
-			i.Privmsgf(config.Irc.Channel, "%s: %s", topic, message)
+			c <- Msg{Topic: dup(topic), Message: dup(message)}
 		case errors.As(err, &big):
-			i.Privmsgf(config.Irc.Channel, "Big message from %s", big.Topic)
+			c <- Msg{Topic: dup(topic), Message: []byte("<Big Message>")}
 		default:
 			log.Print(err)
 			return err
 		}
+	}
+}
+
+func ircSender(config *IrcConfig, i *irc.Connection, c chan Msg) error {
+	for {
+		m := <-c
+		i.Privmsgf(config.Channel, "%s: %s", m.Topic, m.Message)
 	}
 }
