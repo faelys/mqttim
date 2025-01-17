@@ -23,6 +23,7 @@ type IrcConfig struct {
 	MaxLine    int
 	ContSuffix string
 	ContPrefix string
+	Verbose    bool
 }
 
 type MqttConfig struct {
@@ -84,8 +85,10 @@ func main() {
 	go m.Subscribe(nil, "#")
 
 	i := irc.IRC(config.Irc.Nick, "mqttim")
-//	i.VerboseCallbackHandler = true
-//	i.Debug = true
+	if config.Irc.Verbose {
+		i.VerboseCallbackHandler = true
+		i.Debug = true
+	}
 	i.AddCallback("001", func(e *irc.Event) { i.Join(config.Irc.Channel) })
 	i.AddCallback("366", func(e *irc.Event) {})
 	i.AddCallback("PRIVMSG", func(e *irc.Event) {
