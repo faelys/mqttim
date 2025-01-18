@@ -28,6 +28,7 @@ type IrcConfig struct {
 
 type MqttConfig struct {
 	Server   string
+	Session  string
 	UserName string
 	Password string
 }
@@ -72,7 +73,7 @@ func main() {
 		return
 	}
 
-	m, err = mqtt.VolatileSession("mqttim", &mqtt.Config{
+	m, err = mqtt.VolatileSession(config.Mqtt.Session, &mqtt.Config{
 		Dialer:       mqtt.NewDialer("tcp", config.Mqtt.Server),
 		PauseTimeout: 4 * time.Second,
 		UserName:     config.Mqtt.UserName,
