@@ -2,15 +2,18 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/go-mqtt/mqtt"
-	"github.com/pelletier/go-toml/v2"
-	"github.com/thoj/go-ircevent"
 	"log"
 	"os"
 	"strings"
 	"time"
+
+	_ "github.com/glebarez/go-sqlite"
+	"github.com/go-mqtt/mqtt"
+	"github.com/pelletier/go-toml/v2"
+	"github.com/thoj/go-ircevent"
 )
 
 type IrcConfig struct {
@@ -26,6 +29,11 @@ type IrcConfig struct {
 	Verbose    bool
 }
 
+type LogConfig struct {
+	SqlDriver     string
+	SqlConnection string
+}
+
 type MqttConfig struct {
 	Server   string
 	Session  string
@@ -35,6 +43,7 @@ type MqttConfig struct {
 
 type Config struct {
 	Irc  IrcConfig
+	Log  LogConfig
 	Mqtt MqttConfig
 }
 
@@ -65,12 +74,28 @@ func main() {
 	var err error
 	var config Config
 	var m *mqtt.Client
+	var l *mqttLogger
 
 	ircQueue := make(chan Msg)
 
 	err = readConfig("mqttim.toml", &config)
 	if err != nil {
 		return
+	}
+
+	if len(config.Log.SqlDriver) > 0 {
+		db, err := sql.Open(config.Log.SqlDriver, config.Log.SqlConnection)
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
+
+		l, err = logInit(db)
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
+		log.Println("Logger ready")
 	}
 
 	m, err = mqtt.VolatileSession(config.Mqtt.Session, &mqtt.Config{
@@ -99,6 +124,7 @@ func main() {
 		}
 		topic, payload, found := strings.Cut(msg, config.Irc.CmdMid)
 		if found {
+			logSent(l, []byte(payload), []byte(topic))
 			go m.Publish(nil, []byte(payload), topic)
 		}
 	})
@@ -107,7 +133,7 @@ func main() {
 		fmt.Printf("Err %s", err)
 		return
 	}
-	go mqtt2irc(m, ircQueue, &config)
+	go mqtt2irc(m, l, ircQueue, &config)
 	go ircSender(&config.Irc, i, ircQueue)
 	i.Loop()
 }
@@ -118,16 +144,20 @@ func dup(src []byte) []byte {
 	return res
 }
 
-func mqtt2irc(m *mqtt.Client, c chan Msg, config *Config) error {
+func mqtt2irc(m *mqtt.Client, l *mqttLogger, c chan Msg, config *Config) error {
 	var big *mqtt.BigMessage
 
 	for {
 		message, topic, err := m.ReadSlices()
 		switch {
 		case err == nil:
-			c <- Msg{Topic: dup(topic), Message: dup(message)}
+			msg := Msg{Topic: dup(topic), Message: dup(message)}
+			logReceived(l, msg.Message, msg.Topic)
+			c <- msg
 		case errors.As(err, &big):
-			c <- Msg{Topic: dup(topic), Message: []byte("<Big Message>")}
+			msg := Msg{Topic: dup(topic), Message: []byte("<Big Message>")}
+			logReceived(l, msg.Message, msg.Topic)
+			c <- msg
 		default:
 			log.Print(err)
 			return err
@@ -164,4 +194,147 @@ func ircSender(config *IrcConfig, i *irc.Connection, c chan Msg) error {
 			}
 		}
 	}
+}
+
+/**************** MQTT Logger Into SQL ****************/
+
+type mqttLogger struct {
+	db             *sql.DB
+	getTopic       *sql.Stmt
+	insertReceived *sql.Stmt
+	insertSent     *sql.Stmt
+	insertTopic    *sql.Stmt
+}
+
+func logClose(l *mqttLogger) {
+	if l.insertTopic != nil {
+		l.insertTopic.Close()
+		l.insertTopic = nil
+	}
+	if l.insertSent != nil {
+		l.insertSent.Close()
+		l.insertSent = nil
+	}
+	if l.insertReceived != nil {
+		l.insertReceived.Close()
+		l.insertReceived = nil
+	}
+	if l.getTopic != nil {
+		l.getTopic.Close()
+		l.getTopic = nil
+	}
+	if l.db != nil {
+		l.db.Close()
+		l.db = nil
+	}
+}
+
+func logInit(db *sql.DB) (*mqttLogger, error) {
+	var err error
+	result := mqttLogger{db: db}
+
+	for _, cmd := range []string{
+		"CREATE TABLE IF NOT EXISTS topics" +
+			"(id INTEGER PRIMARY KEY AUTOINCREMENT," +
+			" name TEXT NOT NULL);",
+		"CREATE UNIQUE INDEX IF NOT EXISTS i_topics ON topics(name);",
+		"CREATE TABLE IF NOT EXISTS received" +
+			"(timestamp REAL NOT NULL," +
+			" topic_id INTEGER NOT NULL," +
+			" message TEXT NOT NULL," +
+			" FOREIGN KEY (topic_id) REFERENCES topics (id));",
+		"CREATE TABLE IF NOT EXISTS sent" +
+			"(timestamp REAL NOT NULL," +
+			" topic_id INTEGER NOT NULL," +
+			" message TEXT NOT NULL," +
+			" FOREIGN KEY (topic_id) REFERENCES topics (id));",
+		"CREATE INDEX IF NOT EXISTS i_rtime ON received(timestamp);",
+		"CREATE INDEX IF NOT EXISTS i_rtopicid ON received(topic_id);",
+		"CREATE INDEX IF NOT EXISTS i_stime ON sent(timestamp);",
+		"CREATE INDEX IF NOT EXISTS i_stopicid ON sent(topic_id);",
+	} {
+		if _, err = result.db.Exec(cmd); err != nil {
+			logClose(&result)
+			return nil, err
+		}
+	}
+
+	result.getTopic, err = db.Prepare("SELECT id FROM topics WHERE name=?;")
+	if err != nil {
+		logClose(&result)
+		return nil, err
+	}
+
+	result.insertTopic, err = db.Prepare("INSERT OR IGNORE INTO topics(name) VALUES (?);")
+	if err != nil {
+		logClose(&result)
+		return nil, err
+	}
+
+	result.insertSent, err = db.Prepare("INSERT INTO sent (timestamp, topic_id, message) VALUES (?, ?, ?);")
+	if err != nil {
+		logClose(&result)
+		return nil, err
+	}
+
+	result.insertReceived, err = db.Prepare("INSERT INTO received (timestamp, topic_id, message) VALUES (?, ?, ?);")
+	if err != nil {
+		logClose(&result)
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+func logMessage(l *mqttLogger, stmt *sql.Stmt, message, topic []byte) {
+	t := float64(time.Now().UnixNano())/8.64e13 + 2440587.5
+
+	id, err := logTopic(l, topic)
+	if err != nil {
+		log.Println(err)
+		logClose(l)
+		return
+	}
+
+	_, err = stmt.Exec(t, id, message)
+	if err != nil {
+		log.Println(err)
+		logClose(l)
+		return
+	}
+}
+
+func logReceived(l *mqttLogger, message, topic []byte) {
+	if l == nil || l.db == nil {
+		return
+	}
+
+	logMessage(l, l.insertReceived, message, topic)
+}
+
+func logSent(l *mqttLogger, message, topic []byte) {
+	if l == nil || l.db == nil {
+		return
+	}
+
+	logMessage(l, l.insertSent, message, topic)
+}
+
+func logTopic(l *mqttLogger, topic []byte) (int64, error) {
+	var id int64
+	err := l.getTopic.QueryRow(topic).Scan(&id)
+
+	if err == sql.ErrNoRows {
+		res, err := l.insertTopic.Exec(topic)
+
+		if err != nil {
+			return 0, err
+		}
+
+		return res.LastInsertId()
+	} else if err != nil {
+		return 0, err
+	}
+
+	return id, nil
 }
