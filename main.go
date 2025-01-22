@@ -146,7 +146,7 @@ func dup(src []byte) []byte {
 	return res
 }
 
-func mqtt2irc(m *mqtt.Client, l *mqttLogger, f mqttTopicFilter, c chan Msg, config *Config) error {
+func mqtt2irc(m *mqtt.Client, l *mqttLogger, f mqttTopicFilter, c chan Msg, config *Config) {
 	var big *mqtt.BigMessage
 
 	for {
@@ -158,15 +158,27 @@ func mqtt2irc(m *mqtt.Client, l *mqttLogger, f mqttTopicFilter, c chan Msg, conf
 			if !isFiltered(&f, topic) {
 				c <- msg
 			}
+
 		case errors.As(err, &big):
 			msg := Msg{Topic: dup(topic), Message: []byte("<Big Message>")}
 			logReceived(l, msg.Message, msg.Topic)
 			if !isFiltered(&f, topic) {
 				c <- msg
 			}
+
+		case errors.Is(err, mqtt.ErrClosed):
+			log.Println("mqtt2irc finishing:", err)
+			return
+
+		case mqtt.IsConnectionRefused(err):
+			c <- Msg{Topic: []byte("$mqttim/err2"),
+				Message: []byte(err.Error())}
+			time.Sleep(5 * time.Minute)
+
 		default:
-			log.Print(err)
-			return err
+			c <- Msg{Topic: []byte("$mqttim/err"),
+				Message: []byte(err.Error())}
+			time.Sleep(2 * time.Second)
 		}
 	}
 }
