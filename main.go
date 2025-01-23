@@ -146,7 +146,7 @@ func dup(src []byte) []byte {
 	return res
 }
 
-func mqtt2irc(m *mqtt.Client, l *mqttLogger, f mqttTopicFilter, c chan Msg, config *Config) {
+func mqtt2irc(m *mqtt.Client, l *mqttLogger, f mqttTopicFilter, c chan<- Msg, config *Config) {
 	var big *mqtt.BigMessage
 
 	for {
@@ -183,7 +183,7 @@ func mqtt2irc(m *mqtt.Client, l *mqttLogger, f mqttTopicFilter, c chan Msg, conf
 	}
 }
 
-func ircSender(config *IrcConfig, i *irc.Connection, c chan Msg) error {
+func ircSender(config *IrcConfig, i *irc.Connection, c <-chan Msg) {
 	var buf bytes.Buffer
 
 	for {
@@ -207,7 +207,7 @@ func ircSender(config *IrcConfig, i *irc.Connection, c chan Msg) error {
 					buf.Write(m.Message[s : s+l])
 					buf.WriteString(config.ContSuffix)
 				}
-				i.Privmsg(config.Channel, string(buf.Bytes()))
+				i.Privmsg(config.Channel, buf.String())
 				s += l
 			}
 		}
