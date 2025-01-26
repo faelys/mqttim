@@ -70,7 +70,7 @@ func readConfig(path string) Config {
 	defer f.Close()
 
 	d := toml.NewDecoder(f)
-	err = d.Decode(config)
+	err = d.Decode(&config)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -122,6 +122,7 @@ func main() {
 		if !strings.HasPrefix(msg, config.Irc.CmdStart) || !strings.HasSuffix(msg, config.Irc.CmdEnd) {
 			return
 		}
+		msg = msg[len(config.Irc.CmdStart) : len(msg)-len(config.Irc.CmdEnd)]
 		topic, payload, found := strings.Cut(msg, config.Irc.CmdMid)
 		if found {
 			logSent(l, []byte(payload), []byte(topic))
