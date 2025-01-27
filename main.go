@@ -19,9 +19,9 @@ type IrcConfig struct {
 	Channel    string
 	Server     string
 	Nick       string
-	CmdStart   string
-	CmdMid     string
-	CmdEnd     string
+	SendStart  string
+	SendMid    string
+	SendEnd    string
 	MaxLine    int
 	ContSuffix string
 	ContPrefix string
@@ -119,11 +119,11 @@ func main() {
 	i.AddCallback("366", func(e *irc.Event) {})
 	i.AddCallback("PRIVMSG", func(e *irc.Event) {
 		msg := e.Message()
-		if !strings.HasPrefix(msg, config.Irc.CmdStart) || !strings.HasSuffix(msg, config.Irc.CmdEnd) {
+		if !strings.HasPrefix(msg, config.Irc.SendStart) || !strings.HasSuffix(msg, config.Irc.SendEnd) {
 			return
 		}
-		msg = msg[len(config.Irc.CmdStart) : len(msg)-len(config.Irc.CmdEnd)]
-		topic, payload, found := strings.Cut(msg, config.Irc.CmdMid)
+		msg = msg[len(config.Irc.SendStart) : len(msg)-len(config.Irc.SendEnd)]
+		topic, payload, found := strings.Cut(msg, config.Irc.SendMid)
 		if found {
 			logSent(l, []byte(payload), []byte(topic))
 			if err := m.Publish(nil, []byte(payload), topic); err != nil {
