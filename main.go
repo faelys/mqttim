@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"database/sql"
 	"errors"
 	"log"
@@ -22,6 +21,9 @@ type IrcConfig struct {
 	SendStart  string
 	SendMid    string
 	SendEnd    string
+	ShowStart  string
+	ShowMid    string
+	ShowEnd    string
 	MaxLine    int
 	ContSuffix string
 	ContPrefix string
@@ -61,7 +63,13 @@ func errMsg(context string, err error) Msg {
 }
 
 func readConfig(path string) Config {
-	var config Config
+	config := Config{
+		Irc: IrcConfig{
+			Nick:    "mqttim",
+			SendMid: ": ",
+			ShowMid: ": ",
+		},
+	}
 
 	f, err := os.Open("mqttim.toml")
 	if err != nil {
@@ -73,6 +81,11 @@ func readConfig(path string) Config {
 	err = d.Decode(&config)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if config.Irc.MaxLine > 0 && len(config.Irc.ContPrefix)+len(config.Irc.ContSuffix) >= config.Irc.MaxLine {
+		config.Irc.ContPrefix = ""
+		config.Irc.ContSuffix = ""
 	}
 
 	return config
@@ -179,38 +192,43 @@ func mqttReader(m *mqtt.Client, l *mqttLogger, c chan<- Msg, config *Config) {
 }
 
 func ircSender(config *IrcConfig, i *irc.Connection, c <-chan Msg) {
-	var buf bytes.Buffer
+	var buf strings.Builder
 	f := createTopicFilter(config)
 
 	for {
 		m := <-c
 		if !isFiltered(&f, m.Topic) {
-			ircSend(config, i, &m, &buf)
+			str := config.ShowStart +
+				string(m.Topic) +
+				config.ShowMid +
+				string(m.Message) +
+				config.ShowEnd
+			ircSend(config, i, str, &buf)
 		}
 	}
 }
 
-func ircSend(config *IrcConfig, i *irc.Connection, m *Msg, buf *bytes.Buffer) {
-	if len(m.Topic)+2+len(m.Message) < config.MaxLine {
-		i.Privmsgf(config.Channel, "%s: %s", m.Topic, m.Message)
+func ircSend(config *IrcConfig, i *irc.Connection, s string, buf *strings.Builder) {
+	if config.MaxLine <= 0 || len(s) < config.MaxLine {
+		i.Privmsg(config.Channel, s)
 	} else {
-		for s := 0; s < len(m.Message); {
-			l := len(m.Message) - s
+		for offset := 0; offset < len(s); {
+			l := len(s) - offset
 			buf.Reset()
-			buf.Write(m.Topic)
-			buf.WriteString(": ")
-			if s > 0 {
+			if offset > 0 {
 				buf.WriteString(config.ContPrefix)
 			}
+
 			if buf.Len()+l <= config.MaxLine {
-				buf.Write(m.Message[s:])
+				buf.WriteString(s[offset:])
 			} else {
 				l = config.MaxLine - buf.Len() - len(config.ContSuffix)
-				buf.Write(m.Message[s : s+l])
+				buf.WriteString(s[offset : offset+l])
 				buf.WriteString(config.ContSuffix)
 			}
+
 			i.Privmsg(config.Channel, buf.String())
-			s += l
+			offset += l
 		}
 	}
 }
