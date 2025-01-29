@@ -18,6 +18,9 @@ type IrcConfig struct {
 	Channel    string
 	Server     string
 	Nick       string
+	CmdStart   string
+	CmdMid     string
+	CmdEnd     string
 	SendStart  string
 	SendMid    string
 	SendEnd    string
@@ -62,12 +65,19 @@ func errMsg(context string, err error) Msg {
 	}
 }
 
+type command struct {
+	name string
+	arg  string
+}
+
 func readConfig(path string) Config {
 	config := Config{
 		Irc: IrcConfig{
-			Nick:    "mqttim",
-			SendMid: ": ",
-			ShowMid: ": ",
+			Nick:     "mqttim",
+			CmdStart: "!",
+			CmdMid:   " ",
+			SendMid:  ": ",
+			ShowMid:  ": ",
 		},
 	}
 
@@ -96,7 +106,8 @@ func main() {
 	var m *mqtt.Client
 	var l *mqttLogger
 
-	ircQueue := make(chan Msg)
+	cmdQueue := make(chan command, 10)
+	ircQueue := make(chan Msg, 10)
 
 	config := readConfig("mqttim.toml")
 
@@ -132,6 +143,20 @@ func main() {
 	i.AddCallback("366", func(e *irc.Event) {})
 	i.AddCallback("PRIVMSG", func(e *irc.Event) {
 		msg := e.Message()
+		if strings.HasPrefix(msg, config.Irc.CmdStart) && strings.HasSuffix(msg, config.Irc.CmdEnd) {
+			msg = msg[len(config.Irc.CmdStart) : len(msg)-len(config.Irc.CmdEnd)]
+			name, arg, found := strings.Cut(msg, config.Irc.CmdMid)
+			if !found {
+				name = msg
+				arg = ""
+			}
+			if name == "send" {
+				msg = arg
+			} else {
+				cmdQueue <- command{name: name, arg: arg}
+				return
+			}
+		}
 		if !strings.HasPrefix(msg, config.Irc.SendStart) || !strings.HasSuffix(msg, config.Irc.SendEnd) {
 			return
 		}
@@ -150,7 +175,7 @@ func main() {
 	}
 	go subscribeAll(m, ircQueue)
 	go mqttReader(m, l, ircQueue, &config)
-	go ircSender(&config.Irc, i, ircQueue)
+	go ircSender(&config.Irc, i, ircQueue, cmdQueue)
 	i.Loop()
 }
 
@@ -191,19 +216,30 @@ func mqttReader(m *mqtt.Client, l *mqttLogger, c chan<- Msg, config *Config) {
 	}
 }
 
-func ircSender(config *IrcConfig, i *irc.Connection, c <-chan Msg) {
+func ircSender(config *IrcConfig, i *irc.Connection, cm <-chan Msg, cc <-chan command) {
 	var buf strings.Builder
 	f := createTopicFilter(config)
 
 	for {
-		m := <-c
-		if !isFiltered(&f, m.Topic) {
-			str := config.ShowStart +
-				string(m.Topic) +
-				config.ShowMid +
-				string(m.Message) +
-				config.ShowEnd
-			ircSend(config, i, str, &buf)
+		select {
+		case m := <-cm:
+			if !isFiltered(&f, m.Topic) {
+				str := config.ShowStart +
+					string(m.Topic) +
+					config.ShowMid +
+					string(m.Message) +
+					config.ShowEnd
+				ircSend(config, i, str, &buf)
+			}
+		case cmd := <-cc:
+			switch cmd.name {
+			case "quit":
+				log.Println("Quit command", cmd.arg)
+				i.QuitMessage = cmd.arg
+				i.Quit()
+			default:
+				ircSend(config, i, "Unknown command: "+cmd.name, &buf)
+			}
 		}
 	}
 }
