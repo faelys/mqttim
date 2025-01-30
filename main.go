@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -233,10 +234,20 @@ func ircSender(config *IrcConfig, i *irc.Connection, cm <-chan Msg, cc <-chan co
 			}
 		case cmd := <-cc:
 			switch cmd.name {
+			case "filters":
+				ircSendFilters(config, i, &f, &buf)
+			case "ignore":
+				filterAddIgnored(&f, cmd.arg)
+			case "important":
+				filterAddImportant(&f, cmd.arg)
 			case "quit":
 				log.Println("Quit command", cmd.arg)
 				i.QuitMessage = cmd.arg
 				i.Quit()
+			case "unignore":
+				filterDelIgnored(&f, cmd.arg)
+			case "unimportant":
+				filterDelImportant(&f, cmd.arg)
 			default:
 				ircSend(config, i, "Unknown command: "+cmd.name, &buf)
 			}
@@ -267,6 +278,28 @@ func ircSend(config *IrcConfig, i *irc.Connection, s string, buf *strings.Builde
 			offset += l
 		}
 	}
+}
+
+func ircSendTopicList(config *IrcConfig, i *irc.Connection, name string, topics [][]string, buf *strings.Builder) {
+	if len(topics) >= 2 {
+		ircSend(config, i, name+" = [", buf)
+		for index, topic := range topics {
+			suffix := ","
+			if index == len(topics)-1 {
+				suffix = " ]"
+			}
+			ircSend(config, i, fmt.Sprintf("  %q%s", strings.Join(topic, "/"), suffix), buf)
+		}
+	} else if len(topics) == 1 {
+		ircSend(config, i, fmt.Sprintf("%s = [%q]", name, strings.Join(topics[0], "/")), buf)
+	} else {
+		ircSend(config, i, name+" = []", buf)
+	}
+}
+
+func ircSendFilters(config *IrcConfig, i *irc.Connection, f *mqttTopicFilter, buf *strings.Builder) {
+	ircSendTopicList(config, i, "important", f.important, buf)
+	ircSendTopicList(config, i, "ignored", f.ignored, buf)
 }
 
 func subscribeAll(m *mqtt.Client, ircQueue chan<- Msg) {
@@ -432,6 +465,22 @@ type mqttTopicFilter struct {
 	important [][]string
 }
 
+func addPattern(topics [][]string, newPattern string) [][]string {
+	return append(topics, strings.Split(newPattern, "/"))
+}
+
+func delPattern(topics [][]string, toRemove string) [][]string {
+	var result [][]string
+
+	for _, pat := range topics {
+		if strings.Join(pat, "/") != toRemove {
+			result = append(result, pat)
+		}
+	}
+
+	return result
+}
+
 func createTopicFilter(config *IrcConfig) mqttTopicFilter {
 	result := mqttTopicFilter{
 		ignored:   make([][]string, len(config.Ignored)),
@@ -447,6 +496,22 @@ func createTopicFilter(config *IrcConfig) mqttTopicFilter {
 	}
 
 	return result
+}
+
+func filterAddIgnored(filter *mqttTopicFilter, pattern string) {
+	filter.ignored = addPattern(filter.ignored, pattern)
+}
+
+func filterAddImportant(filter *mqttTopicFilter, pattern string) {
+	filter.important = addPattern(filter.important, pattern)
+}
+
+func filterDelIgnored(filter *mqttTopicFilter, pattern string) {
+	filter.ignored = delPattern(filter.ignored, pattern)
+}
+
+func filterDelImportant(filter *mqttTopicFilter, pattern string) {
+	filter.important = delPattern(filter.important, pattern)
 }
 
 func isFiltered(filter *mqttTopicFilter, topic []byte) bool {
