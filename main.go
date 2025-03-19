@@ -42,10 +42,11 @@ type LogConfig struct {
 }
 
 type MqttConfig struct {
-	Server   string
-	Session  string
-	UserName string
-	Password string
+	Server    string
+	Session   string
+	UserName  string
+	Password  string
+	Keepalive int
 }
 
 type Config struct {
@@ -177,6 +178,7 @@ func main() {
 	go subscribeAll(m, ircQueue)
 	go mqttReader(m, l, ircQueue, &config)
 	go ircSender(&config.Irc, i, ircQueue, cmdQueue)
+	go mqttKeepalive(m, ircQueue, config.Mqtt.Keepalive)
 	i.Loop()
 }
 
@@ -184,6 +186,22 @@ func dup(src []byte) []byte {
 	res := make([]byte, len(src))
 	copy(res, src)
 	return res
+}
+
+func mqttKeepalive(m *mqtt.Client, c chan<- Msg, keepalive int) {
+	if keepalive <= 0 {
+		return
+	}
+
+	period := time.Duration(keepalive) * time.Second
+
+	for {
+		time.Sleep(period)
+
+		if err := m.Ping(nil); err != nil {
+			c <- errMsg("mqttPing", err)
+		}
+	}
 }
 
 func mqttReader(m *mqtt.Client, l *mqttLogger, c chan<- Msg, config *Config) {
