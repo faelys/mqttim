@@ -46,6 +46,7 @@ type MqttConfig struct {
 	Session   string
 	UserName  string
 	Password  string
+	TLS       bool
 	Keepalive int
 }
 
@@ -103,6 +104,14 @@ func readConfig(path string) Config {
 	return config
 }
 
+func dialer(config Config) mqtt.Dialer {
+	if config.Mqtt.TLS {
+		return mqtt.NewTLSDialer("tcp", config.Mqtt.Server, nil)
+	} else {
+		return mqtt.NewDialer("tcp", config.Mqtt.Server)
+	}
+}
+
 func main() {
 	var err error
 	var m *mqtt.Client
@@ -127,7 +136,7 @@ func main() {
 	}
 
 	m, err = mqtt.VolatileSession(config.Mqtt.Session, &mqtt.Config{
-		Dialer:       mqtt.NewDialer("tcp", config.Mqtt.Server),
+		Dialer:       dialer(config),
 		PauseTimeout: 4 * time.Second,
 		UserName:     config.Mqtt.UserName,
 		Password:     []byte(config.Mqtt.Password),
