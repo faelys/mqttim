@@ -48,6 +48,7 @@ type MqttConfig struct {
 	Password  string
 	TLS       bool
 	Keepalive int
+	Topics    []string
 }
 
 type Config struct {
@@ -81,6 +82,9 @@ func readConfig(path string) Config {
 			CmdMid:   " ",
 			SendMid:  ": ",
 			ShowMid:  ": ",
+		},
+		Mqtt: MqttConfig{
+			Topics: []string{"#"},
 		},
 	}
 
@@ -184,7 +188,7 @@ func main() {
 	if err != nil {
 		log.Fatal("irc.Connect:", err)
 	}
-	go subscribeAll(m, ircQueue)
+	go subscribeAll(m, ircQueue, config.Mqtt.Topics)
 	go mqttReader(m, l, ircQueue, &config)
 	go ircSender(&config.Irc, i, ircQueue, cmdQueue)
 	go mqttKeepalive(m, ircQueue, config.Mqtt.Keepalive)
@@ -329,15 +333,17 @@ func ircSendFilters(config *IrcConfig, i *irc.Connection, f *mqttTopicFilter, bu
 	ircSendTopicList(config, i, "ignored", f.ignored, buf)
 }
 
-func subscribeAll(m *mqtt.Client, ircQueue chan<- Msg) {
-	for {
-		err := m.Subscribe(nil, "#")
+func subscribeAll(m *mqtt.Client, ircQueue chan<- Msg, topics []string) {
+	for _, topic := range topics {
+		for {
+			err := m.Subscribe(nil, topic)
 
-		if err != nil {
-			ircQueue <- errMsg("Subscribe", err)
-			time.Sleep(1 * time.Minute)
-		} else {
-			return
+			if err != nil {
+				ircQueue <- errMsg("Subscribe", err)
+				time.Sleep(1 * time.Minute)
+			} else {
+				break
+			}
 		}
 	}
 }
