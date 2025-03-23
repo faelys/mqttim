@@ -267,6 +267,15 @@ func ircSender(config *IrcConfig, i *irc.Connection, cm <-chan Msg, cc <-chan co
 			switch cmd.name {
 			case "filters":
 				ircSendFilters(config, i, &f, &buf)
+			case "help":
+				ircSend(config, i, "Command line:", &buf)
+				ircSendHelp(config, i, &buf, "filters", "")
+				ircSendHelp(config, i, &buf, "help", "")
+				ircSendHelp(config, i, &buf, "ignore", "<topic>")
+				ircSendHelp(config, i, &buf, "important", "<topic>")
+				ircSendHelp(config, i, &buf, "quit", "[message]")
+				ircSendHelp(config, i, &buf, "unignore", "<topic>")
+				ircSendHelp(config, i, &buf, "unimportant", "<topic>")
 			case "ignore":
 				filterAddIgnored(&f, cmd.arg)
 			case "important":
@@ -331,6 +340,14 @@ func ircSendTopicList(config *IrcConfig, i *irc.Connection, name string, topics 
 func ircSendFilters(config *IrcConfig, i *irc.Connection, f *mqttTopicFilter, buf *strings.Builder) {
 	ircSendTopicList(config, i, "important", f.important, buf)
 	ircSendTopicList(config, i, "ignored", f.ignored, buf)
+}
+
+func ircSendHelp(config *IrcConfig, i *irc.Connection, buf *strings.Builder, cmd, arg string) {
+	if arg == "" {
+		ircSend(config, i, fmt.Sprintf("- %q", config.CmdStart+cmd+config.CmdEnd), buf)
+	} else {
+		ircSend(config, i, fmt.Sprintf("- %q", config.CmdStart+cmd+config.CmdMid+arg+config.CmdEnd), buf)
+	}
 }
 
 func subscribeAll(m *mqtt.Client, ircQueue chan<- Msg, topics []string) {
