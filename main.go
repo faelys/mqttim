@@ -88,7 +88,7 @@ func readConfig(path string) Config {
 		},
 	}
 
-	f, err := os.Open("mqttim.toml")
+	f, err := os.Open(path)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -124,7 +124,11 @@ func main() {
 	cmdQueue := make(chan command, 10)
 	ircQueue := make(chan Msg, 10)
 
-	config := readConfig("mqttim.toml")
+	config_file := "mqttim.toml"
+	if len(os.Args) > 1 {
+		config_file = os.Args[1]
+	}
+	config := readConfig(config_file)
 
 	if len(config.Log.SqlDriver) > 0 {
 		db, err := sql.Open(config.Log.SqlDriver, config.Log.SqlConnection)
